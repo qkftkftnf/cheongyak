@@ -106,6 +106,7 @@
     $$('[data-example]').forEach(el => { el.hidden = !isExample; });
     renderScore();
     renderElig();
+    renderPlan();
   }
 
   // ---------- 가점 ----------
@@ -210,6 +211,98 @@
         <div class="meter-me" style="left:${pos(inc.pct)}"></div>
       </div>
       ${inc.size > 6 ? '<p class="fine">7인 이상 가구는 6인 기준으로 계산했어. 공고문 기준을 확인해.</p>' : ''}`;
+  }
+
+  // ---------- 전략 ----------
+  const FIT_LABEL = { top: '가장 추천', good: '추천', ref: '참고', no: '지금은 어려움' };
+  function renderPlan() {
+    if (!$('#tab-plan')) return;
+    const ref = refDate();
+    const s = L.strategy(profile, ref);
+
+    const r1txt = st => ({ ok: '1순위', maybe: '1순위 확인', no: '2순위' }[st]);
+    $('#diag').innerHTML = `
+      <span class="dg-kicker">내 청약 진단 · ${L.fmtFull(ref)} 기준</span>
+      <p class="dg-head">${esc(s.headline)}</p>
+      <p class="dg-sub">${esc(s.sub)}</p>
+      <div class="dg-stats">
+        <span><b>${s.score == null ? '–' : s.score}</b>가점</span>
+        <span><b>${r1txt(s.r1p.status)}</b>민영</span>
+        <span><b>${r1txt(s.r1g.status)}</b>공공</span>
+        <span><b>${s.spOk.length}개</b>특공 가능</span>
+      </div>`;
+
+    // 가점 위치
+    const sr = R.scoreRef, P = v => `${(v / 84) * 100}%`;
+    $('#gauge').innerHTML = s.score == null ? '' : `
+      <div class="g-track" role="img" aria-label="내 가점 ${s.score}점, ${esc(sr.label)} ${sr.low}~${sr.high}점">
+        <div class="g-fill" style="width:${P(s.score)}"></div>
+        <div class="g-band" style="left:${P(sr.low)};width:${P(sr.high - sr.low)}"></div>
+        <div class="g-me" style="left:${P(s.score)}"><span>내 ${s.score}점</span></div>
+      </div>
+      <div class="g-scale">${[0, 20, 40, 60, 84].map(v => `<span style="left:${P(v)}">${v}</span>`).join('')}</div>
+      <p class="fine"><i class="g-key"></i>${esc(sr.label)} ${sr.low}~${sr.high}점 (${sr.asOf} 보도 기준, 공식 통계 아님)</p>`;
+
+    $('#routes').innerHTML = s.routes.map((r, i) => `
+      <li class="route fit-${r.fit}">
+        <div class="rt-head"><span class="rt-num">${i + 1}</span><span class="rt-title">${esc(r.title)}</span><span class="pill pill-fit-${r.fit}">${FIT_LABEL[r.fit]}</span></div>
+        <ul class="rt-why">${r.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+        ${r.act ? `<p class="rt-act">${esc(r.act)}</p>` : ''}
+      </li>`).join('');
+
+    // 추첨 비율 표
+    const col = s.ctx.regulated ? 'spec' : 'none';
+    const cell = (k, i) => {
+      const v = s.ratios[k][i];
+      const txt = k === 'none' && i < 2 ? '60% 이상' : `${100 - v}%`;
+      const hi = k === col ? ' class="hl"' : '';
+      return `<td${hi}>${txt}</td>`;
+    };
+    $('#ratioBox').innerHTML = `
+      <div class="tbl-wrap"><table class="tbl ratio">
+        <thead><tr><th>추첨 비율</th><th${col === 'spec' ? ' class="hl"' : ''}>투기과열</th><th>조정대상</th><th${col === 'none' ? ' class="hl"' : ''}>비규제</th></tr></thead>
+        <tbody>${['60㎡ 이하', '60~85㎡', '85㎡ 초과'].map((a, i) =>
+          `<tr><td><b>${a}</b></td>${cell('spec', i)}${cell('adj', i)}${cell('none', i)}</tr>`).join('')}</tbody>
+      </table></div>
+      <p class="fine">민영주택 기준. 나머지는 가점제로 뽑아. 투기과열지구이면서 조정대상지역이면 투기과열 기준이야. 표시된 열은 자격 탭의 '규제지역' 설정 기준.</p>`;
+
+    // 할 일
+    $('#todo').innerHTML = s.todo.length ? s.todo.map(t => `
+      <div class="td td-${t.kind}">
+        <span class="td-date">${t.date ? L.fmtFull(t.date) : '지금'}</span>
+        <span class="td-what">${esc(t.what)}</span>
+        ${t.date ? `<span class="td-left">${dLeft(t.date)}</span>` : '<span></span>'}
+      </div>`).join('') : '<p class="hint">지금 챙길 날짜가 없어.</p>';
+
+    renderMatches();
+    $('#planFine').textContent = `${R.asOf} 기준 규칙으로 만든 참고용 전략이야. 실제 공급 비율과 자격은 단지마다 달라서, 넣기 전에 입주자모집공고문을 꼭 확인해.`;
+  }
+  function dLeft(d) {
+    const n = L.daysBetween(L.today(), d);
+    if (n <= 0) return '오늘';
+    if (n < 60) return `D-${n}`;
+    const mo = Math.round(n / 30.4);
+    return mo < 24 ? `${mo}개월 뒤` : `${Math.floor(mo / 12)}년 뒤`;
+  }
+  function renderMatches() {
+    const box = $('#matches');
+    if (!box) return;
+    const t = L.today(), ref = refDate();
+    let list = currentNotices();
+    if (prefs.regions.length) list = list.filter(n => prefs.regions.includes(n.region));
+    const scored = list.map(n => {
+      const st = L.noticeStatus(n, t);
+      const f = L.noticeFit(n, profile, ref, st);
+      return f ? { n, st, f } : null;
+    }).filter(x => x && x.f.pts > 0).sort((a, b) => b.f.pts - a.f.pts || a.st.date - b.st.date).slice(0, 4);
+    box.innerHTML = scored.length ? scored.map(({ n, st, f }) => `
+      <li class="match">
+        <div class="mt-top"><span class="pill pill-${st.key}">${esc(st.label)}</span>${st.badge ? `<span class="dday">${st.badge}</span>` : ''}${n.sample ? '<span class="pill pill-sample">예시</span>' : ''}</div>
+        <button type="button" class="mt-name" data-open="${esc(n.id)}">${esc(n.name)}</button>
+        <span class="mt-sub">${esc(n.region)} · ${esc(n.typeLabel)}</span>
+        <span class="mt-tags">${f.reasons.map(r => `<span class="tag ${r.ok === true ? 'tag-ok' : r.ok === false ? 'tag-no' : ''}">${esc(r.t)}</span>`).join('')}</span>
+      </li>`).join('')
+      : `<li class="hint">${apiKey ? '지금 접수 예정인 공고 중에 딱 맞는 게 없어.' : '공고가 없어.'}</li>`;
   }
 
   // ---------- 공고 ----------
@@ -390,6 +483,7 @@
 
     $('#noticeList').innerHTML = list.length ? list.slice(0, 120).map(({ n, st }) => noticeCard(n, st, t)).join('')
       : `<li class="notices-empty">${loading ? '불러오는 중…' : prefs.filter === 'star' ? '★를 눌러 관심 공고를 모아봐.' : '조건에 맞는 공고가 없어.'}</li>`;
+    renderMatches();
   }
 
   function flagsHTML(n) {
@@ -657,7 +751,7 @@
   renderProfileViews();
   renderSettings();
   renderNotices();
-  const TABS = ['notice', 'score', 'elig', 'settings'];
+  const TABS = ['notice', 'score', 'elig', 'plan', 'settings'];
   const hash = location.hash.replace('#', '');
   showTab(TABS.includes(hash) ? hash : prefs.tab);
   window.addEventListener('hashchange', () => {
@@ -670,7 +764,7 @@
   // 날짜가 바뀌면 D-day 다시 계산
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    renderNotices(); renderScore(); renderElig();
+    renderNotices(); renderScore(); renderElig(); renderPlan();
     if (apiKey && cache && Date.now() - cache.at > 3 * 3600 * 1000) fetchNotices();
   });
 

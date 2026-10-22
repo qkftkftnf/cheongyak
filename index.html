@@ -198,6 +198,38 @@
     </form>
   </section>
 
+  <!-- ===== 전략 ===== -->
+  <section class="tab" id="tab-plan" aria-label="전략" hidden>
+    <div class="example-note" data-example>
+      지금 보이는 건 <b>예시 값</b>으로 만든 전략이야. <button type="button" class="linklike" data-goto="score">가점</button>·<button type="button" class="linklike" data-goto="elig">자격</button> 탭에 내 정보를 넣으면 바뀌어.
+    </div>
+
+    <div class="diag" id="diag"></div>
+    <div class="gauge" id="gauge"></div>
+
+    <h2 class="h2">추천 루트 <span class="h2-sub">잘 맞는 순서</span></h2>
+    <ol class="routes" id="routes"></ol>
+
+    <h2 class="h2">추첨 물량이 많은 곳</h2>
+    <div id="ratioBox"></div>
+
+    <h2 class="h2">할 일 · 날짜</h2>
+    <div class="todo" id="todo"></div>
+
+    <h2 class="h2">지금 볼 만한 공고</h2>
+    <ul class="matches" id="matches"></ul>
+
+    <div class="cautions">
+      <h3>넣기 전에 꼭</h3>
+      <ul>
+        <li>특별공급은 세대당 평생 한 번만 당첨될 수 있어.</li>
+        <li>당첨되면 재당첨 제한이 걸려 (규제지역은 최대 10년). 계약 안 할 곳은 넣지 마.</li>
+        <li>부양가족은 실제로 같이 살아야 인정돼. 위장전입이 걸리면 당첨이 취소돼.</li>
+      </ul>
+    </div>
+    <p class="fine" id="planFine"></p>
+  </section>
+
   <!-- ===== 설정 ===== -->
   <section class="tab" id="tab-settings" aria-label="설정" hidden>
     <div class="panel">
@@ -276,6 +308,10 @@
   <button type="button" data-tab="elig">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg>
     <span>자격</span>
+  </button>
+  <button type="button" data-tab="plan">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5z"/></svg>
+    <span>전략</span>
   </button>
   <button type="button" data-tab="settings">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>

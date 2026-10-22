@@ -291,6 +291,217 @@
     return { list, inc, r1 };
   }
 
+  // ---------- 전략 ----------
+  // fit: top(가장 추천) | good(추천) | ref(참고) | no(지금은 어려움)
+  const FIT_ORDER = { top: 0, good: 1, ref: 2, no: 3 };
+  const AREA3 = ['60㎡ 이하', '60~85㎡', '85㎡ 초과'];
+
+  function strategy(p, ref) {
+    const sc = calcScore(p, ref);
+    const ri = regionInfo(p.region);
+    const ctx = { regulated: !!p.regulated, capital: ri.capital, group: ri.group, areaIdx: num(p.area) };
+    const r1p = rank1(p, ref, Object.assign({ mode: 'private' }, ctx));
+    const r1g = rank1(p, ref, Object.assign({ mode: 'public' }, ctx));
+    const spP = specials(p, ref, 'private', ctx), spG = specials(p, ref, 'public', ctx);
+    const noHouse = p.house !== 'now';
+    const score = sc.complete ? sc.total : null;
+    const dep = numOrNull(p.deposit);
+    const m = joinMonths(p, ref);
+    const deposits = R.deposit[ri.group];
+    const bands = R.scoreBands, sref = R.scoreRef;
+
+    // 특공은 유형별로 민영·공공 중 나은 쪽
+    const rk = { ok: 0, maybe: 1, no: 2 };
+    const sp = spP.list.map(a => {
+      const b = spG.list.find(x => x.key === a.key);
+      const best = rk[a.status] <= rk[b.status] ? a : b;
+      return { key: a.key, name: a.name, status: best.status, priv: a.status, pub: b.status, checks: best.checks };
+    });
+    const spOk = sp.filter(s => s.status === 'ok'), spMaybe = sp.filter(s => s.status === 'maybe');
+    const names = list => list.map(s => s.name).join('·');
+
+    const routes = [], todo = [];
+    const addTodo = (date, what, kind) => todo.push({ date, what, kind: kind || 'step' });
+
+    // 1순위
+    if (r1p.status !== 'ok') {
+      const why = r1p.checks.filter(c => c.s !== 'ok').map(c => c.t);
+      const acts = [];
+      const j = parseD(p.join);
+      if (j && m != null && m < r1p.needMonths) {
+        const d = addMonths(j, r1p.needMonths);
+        acts.push(`${fmtFull(d)}에 가입기간이 채워져`);
+        addTodo(d, '통장 가입기간 충족 → 1순위', 'goal');
+      }
+      const needDep = deposits[ctx.areaIdx];
+      if (dep != null && dep < needDep) {
+        acts.push(`예치금 ${won(needDep - dep)}만 더 넣으면 돼`);
+        addTodo(null, `예치금 ${won(needDep - dep)} 더 넣기 → ${R.areaNames[ctx.areaIdx]} 1순위`, 'goal');
+      }
+      if (ctx.regulated && !p.head) acts.push('규제지역 1순위는 세대주여야 해');
+      routes.push({
+        key: 'rank1', title: '1순위 자격 만들기', fit: r1p.status === 'no' ? 'top' : 'good',
+        why, act: acts.join(' · ') || '빈 칸을 채우면 정확히 알려줄게',
+      });
+    }
+
+    // 특별공급
+    {
+      let fit, why, act;
+      if (!noHouse) {
+        fit = 'no'; why = ['특별공급은 세대 전원이 무주택이어야 해']; act = '';
+      } else if (spOk.length) {
+        fit = 'top';
+        why = [`${names(spOk)} 조건을 맞췄어`, '특공은 가점보다 소득 구간·자녀 수·추첨으로 뽑아서 가점이 낮아도 기회가 커'];
+        if (spMaybe.length) why.push(`${names(spMaybe)}은(는) 확인이 더 필요해`);
+        act = '특공 접수일(보통 1순위 하루 전)을 챙겨. 특공은 세대당 평생 한 번이니 정말 살 곳에 써.';
+      } else if (spMaybe.length) {
+        fit = 'good';
+        why = spMaybe.map(s => `${s.name}: ${(s.checks.find(c => c.s === 'warn') || {}).t || '확인 필요'}`);
+        act = '자격 탭에서 확인 필요한 항목을 채워봐';
+      } else {
+        fit = 'no'; why = ['지금 맞는 특공 유형이 없어']; act = '';
+      }
+      routes.push({ key: 'special', title: '특별공급', fit, why, act });
+
+      const mar = p.married ? parseD(p.marriage) : null;
+      if (mar && noHouse) {
+        const d7 = addYears(mar, 7);
+        if (d7 > ref) addTodo(d7, '혼인 7년 → 신혼부부 특공 자격 끝', 'deadline');
+      }
+    }
+
+    // 가점제
+    {
+      let fit, why, act = '';
+      const refTxt = `${sref.label} ${sref.low}~${sref.high}점 (${sref.asOf})`;
+      if (!noHouse) { fit = 'no'; why = ['가점제는 무주택 세대만 넣을 수 있어']; }
+      else if (r1p.status === 'no') { fit = 'ref'; why = ['1순위가 되어야 가점제에 들어갈 수 있어']; }
+      else if (score == null) { fit = 'ref'; why = ['가점 탭을 다 채우면 판단해줄게']; }
+      else if (score >= bands.high) {
+        fit = 'top'; why = [`${score}점은 인기 단지도 해볼 만한 점수야`, `참고: ${refTxt}`];
+        act = '분양가상한제 단지처럼 시세보다 싼 곳에 가점제로 도전해';
+      } else if (score >= bands.mid) {
+        fit = 'good';
+        why = [`${score}점은 서울 인기 단지엔 빠듯해 (${refTxt})`,
+          ri.capital ? '서울 외곽·수도권 신도시나 경쟁 덜한 타입은 노려볼 만해' : '지방은 수도권보다 경쟁이 덜한 편이라 해볼 만해'];
+        act = '같은 단지에서도 경쟁률 낮은 타입(저층·비선호 향)을 골라';
+      } else {
+        fit = 'ref'; why = [`${score}점이면 인기 단지 가점제는 어려워 (${refTxt})`];
+        act = '가점은 시간이 지나면 저절로 올라. 그동안 추첨제·특공을 노려';
+      }
+      routes.push({ key: 'point', title: '가점제 일반공급', fit, why, act });
+      sc.nexts.filter(n => n.date > ref).slice(0, 3).forEach(n => addTodo(n.date, `${n.what} → 가점 +${n.gain}`, 'score'));
+    }
+
+    // 추첨제
+    {
+      let fit, why, act = '';
+      const ratio = ctx.regulated ? R.pointRatio.spec : R.pointRatio.none;
+      const draw = ratio.map(v => 100 - v);
+      if (r1p.status === 'no') { fit = 'ref'; why = ['1순위가 먼저야. 추첨제도 1순위끼리 뽑아']; }
+      else if (!noHouse) {
+        fit = 'ref';
+        why = [`추첨 물량의 ${R.drawNoHouseShare}% 이상은 무주택자 몫이야. 1주택자는 나머지에 기존 집 처분 조건으로만 넣을 수 있어`];
+      } else {
+        fit = score == null || score < bands.mid ? 'top' : score < bands.high ? 'good' : 'ref';
+        why = [`추첨은 가점과 상관없어. 추첨 물량의 ${R.drawNoHouseShare}% 이상을 무주택자에게 먼저 줘`];
+        if (ctx.regulated) {
+          why.push(`규제지역은 ${AREA3[0]} 타입이 추첨 ${draw[0]}%로 제일 많아`);
+          act = `${AREA3[0]} 타입을 노려. 예치금은 ${won(deposits[0])}이면 돼`;
+        } else {
+          why.push(`비규제지역 ${AREA3[2]} 타입은 100% 추첨이야`);
+          act = `85㎡ 초과 타입을 노려. 102㎡ 이하는 예치금 ${won(deposits[1])}, 그보다 크면 ${won(deposits[2])}~${won(deposits[3])} 필요해`;
+          if (dep != null && dep < deposits[1] && r1p.status === 'ok') addTodo(null, `예치금 ${won(deposits[1] - dep)} 더 넣기 → 102㎡ 이하 대형 타입 1순위`, 'goal');
+        }
+      }
+      routes.push({ key: 'draw', title: '추첨제 일반공급', fit, why, act, draw, regulated: ctx.regulated });
+    }
+
+    // 공공분양
+    {
+      let fit, why, act = '';
+      if (!noHouse) { fit = 'no'; why = ['공공분양은 세대 전원이 무주택이어야 해']; }
+      else {
+        fit = r1g.status === 'ok' ? 'good' : 'ref';
+        why = ['국민주택 일반공급은 가점 대신 40㎡ 초과는 저축총액, 40㎡ 이하는 납입 횟수 순으로 뽑아',
+          `한 달에 ${R.publicMonthlyCap}만원까지 인정돼 (2024년 11월부터)`];
+        const inc = spG.inc;
+        if (inc.pct != null) {
+          why.push(inc.pct <= 100 ? `60㎡ 이하 일반공급 소득 기준(100%) 안이야 (내 소득 ${pctText(inc.pct)})`
+            : `60㎡ 이하 일반공급은 소득 100% 이하라 해당이 안 돼 (내 소득 ${pctText(inc.pct)})`);
+        }
+        if (r1g.status !== 'ok') why.push(...r1g.checks.filter(c => c.s !== 'ok').map(c => c.t));
+        act = `매달 ${R.publicMonthlyCap}만원씩 빠짐없이 넣어. 한 달 거르면 그 회차는 비어`;
+      }
+      routes.push({ key: 'public', title: '공공분양 일반공급', fit, why, act });
+    }
+
+    // 무순위
+    {
+      const fit = !noHouse ? 'ref' : score != null && score >= bands.high ? 'ref' : 'good';
+      const why = ['청약통장·가점 없이 추첨하는 미계약·잔여 물량이야. 갑자기 공고가 떠',
+        noHouse ? '2025년 개편 이후 무주택 세대 위주로 뽑는 방향이야' : '2025년 개편 이후 무주택 세대 위주로 바뀌는 중이라 공고문을 꼭 확인해'];
+      routes.push({ key: 'remndr', title: '무순위 · 잔여세대', fit, why, act: '설정에서 공고 종류에 무순위·잔여세대를 켜두고 자주 확인해' });
+    }
+
+    routes.sort((a, b) => FIT_ORDER[a.fit] - FIT_ORDER[b.fit]);
+
+    // 한 줄 진단
+    let headline, sub;
+    if (!noHouse) {
+      headline = '1주택자는 추첨제 일부만 가능해';
+      sub = '특공·가점제·공공분양은 무주택 세대만 넣을 수 있어. 기존 집 처분 조건 추첨을 노려.';
+    } else if (r1p.status === 'no' && r1g.status === 'no' && !spOk.length) {
+      headline = '1순위부터 만들자';
+      sub = '1순위가 되기 전에는 2순위나 무순위만 넣을 수 있어.';
+    } else if (spOk.length) {
+      headline = '특별공급이 제일 빠른 길이야';
+      sub = `${names(spOk)} 특공 조건을 맞췄어. 가점 경쟁보다 당첨 확률이 높아.`;
+    } else if (score != null && score >= bands.high) {
+      headline = '가점으로 정면 승부해도 돼';
+      sub = `${score}점이면 인기 단지 가점제도 노려볼 만해.`;
+    } else if (score != null && score >= bands.mid) {
+      headline = '가점제는 외곽, 인기 단지는 추첨으로';
+      sub = `${score}점은 중간 점수야. 단지와 타입을 골라 쓰는 게 중요해.`;
+    } else {
+      headline = '추첨제와 무순위를 노리자';
+      sub = score == null ? '가점 탭을 채우면 더 정확해져.' : `${score}점은 가점제로는 불리해. 추첨 물량이 많은 타입을 골라.`;
+    }
+
+    todo.sort((a, b) => (a.date ? a.date - (b.date || Infinity) : b.date ? 1 : 0));
+    return {
+      score, scoreComplete: sc.complete, headline, sub, routes, todo, r1p, r1g,
+      spOk, spMaybe, noHouse, ctx,
+      ratios: { spec: R.pointRatio.spec, adj: R.pointRatio.adj, none: R.pointRatio.none },
+    };
+  }
+
+  // 공고 하나가 나한테 얼마나 맞는지
+  function noticeFit(n, p, ref, st) {
+    if (!n.checksRank && n.kind !== 'remndr') return null;
+    if (st.key !== 'open' && st.key !== 'soon') return null; // 접수가 남은 공고만
+    const ri = regionInfo(p.region);
+    const reasons = [];
+    let pts = 2;
+    if (n.region === p.region) { pts += 2; reasons.push({ ok: true, t: '해당지역' }); }
+    else reasons.push({ ok: null, t: '기타지역' });
+    if (n.kind === 'remndr') {
+      if (p.house !== 'now') { pts += 1; reasons.push({ ok: true, t: '통장 없이 추첨' }); }
+    } else {
+      const mode = n.isPublic ? 'public' : 'private';
+      const regulated = n.flags.spec || n.flags.adj;
+      const r1 = rank1(p, ref, { mode, regulated, capital: R.capital.includes(n.region), group: ri.group, areaIdx: 0 });
+      if (r1.status === 'ok') { pts += 2; reasons.push({ ok: true, t: '1순위' }); }
+      else reasons.push({ ok: false, t: r1.status === 'no' ? '2순위' : '1순위 확인' });
+      const sp = specials(p, ref, mode, { regulated, capital: R.capital.includes(n.region), group: ri.group, areaIdx: 0 });
+      const ok = sp.list.filter(s => s.status === 'ok');
+      if (ok.length) { pts += 2; reasons.push({ ok: true, t: `특공 ${ok.map(s => s.name).join('·')}` }); }
+      if (n.flags.cap) reasons.push({ ok: null, t: '분양가상한제' });
+    }
+    return { pts, reasons };
+  }
+
   // ---------- 청약홈 API ----------
   const API_BASE = 'https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/';
   const API_KINDS = {
@@ -455,7 +666,7 @@
     fmtShort, fmtDay, fmtFull, weekday, ym, num, numOrNull, won, price, pctText,
     EMPTY_PROFILE, EXAMPLE_PROFILE,
     calcScore, familyCount, householdSize, incomeInfo,
-    regionInfo, areaIndex, needMonths, rank1, specials,
+    regionInfo, areaIndex, needMonths, rank1, specials, strategy, noticeFit,
     API_BASE, API_KINDS, normRegion, normalize, normalizeAll, normModel,
     noticeStatus, sortNotices, agenda,
   };

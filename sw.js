@@ -1,5 +1,5 @@
 /* 오프라인에서도 열리도록 앱 파일을 캐시. 청약홈 API 요청은 건드리지 않음. */
-const VERSION = 'cy-v2';
+const VERSION = 'cy-v3';
 const FONTS = 'cy-fonts';
 const SHELL = [
   './', './index.html', './styles.css', './rules.js', './logic.js', './app.js',
